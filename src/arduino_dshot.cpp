@@ -59,6 +59,9 @@ uint16_t counter[buffSize];
 uint16_t receivedPackets = 0;
 uint16_t successPackets = 0;
 
+bool newResponse = false;
+bool hasEsc = false;
+
 // Duration LUT - considerably faster than division
 const uint8_t duration[] = {
   0,
@@ -79,6 +82,8 @@ const uint8_t duration[] = {
   3, // 15 <
   3,
   3, // 17
+
+  // There should not be more than 3 bits with the same state after each other
   4, // 18
   4,
   4, // 20 <
@@ -114,8 +119,8 @@ void processTelemetryResponse() {
   TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off 
   
   // Limit to 70us - that should be enough to fetch the whole response
-  // at 2MHz - scale factor 8 - 140 ticks should be enough.
-  OCR1A = 140;
+  // at 2MHz - scale factor 8 - 150 ticks seems to be a sweetspot.
+  OCR1A = 150;
   TCNT1 = 0x00;
 
   TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
@@ -287,6 +292,7 @@ ISR(TIMER2_COMPA_vect) {
 
   #if inverted
     processTelemetryResponse();
+    newResponse = true;
   #endif
 }
 
@@ -306,6 +312,7 @@ void setup() {
   #if debug
     Serial.println("Input throttle value to be sent to ESC");
     Serial.println("Valid throttle values are 47 - 2047");
+    Serial.println("Lines are only printed if the value changed");
     Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
     Serial.print(frequency);
     Serial.println("Hz");
@@ -334,44 +341,59 @@ void readUpdate() {
 }
 
 void printResponse() {
-  if((dshotResponse != dshotResponseLast) || !debug) {
-    uint16_t mapped = dshot.mapTo16Bit(dshotResponse);
+  if(newResponse) {
+    newResponse  = false;
 
+    uint16_t mapped = dshot.mapTo16Bit(dshotResponse);
     uint8_t crc = mapped & 0x0F;
     uint16_t value = mapped >> 4;
     uint8_t crcExpected = dshot.calculateCrc(value);
 
-    uint32_t periodBase = value & 0b0000000111111111;
-    uint8_t periodShift = value >> 9 & 0b00000111;
-    uint32_t periodTime =  periodBase << periodShift;
+    // Wait for a first valid response
+    if(!hasEsc) {
+      if(crc == crcExpected) {
+        hasEsc = true;
+      }
 
-    // Calculation of success rate is a bit flawed since it will not update for every response
-    // If we want to havae this, we would need to move calculation to the interrupt too.
+      return;
+    }
+
+    // Calculate success rate - percentage of packeges on which CRC matched the value
     receivedPackets++;
     if(crc == crcExpected) {
       successPackets++;
-      Serial.print("OK: ");
-    } else {
-      Serial.print("--: ");
     }
 
-    #if debug
-      // Reset packet count if overflows
-      if(!receivedPackets) {
-        successPackets = 0;
-      }
-      float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
-    #endif
+    // Reset packet count if overflows
+    if(!receivedPackets) {
+      successPackets = 0;
+    }
 
-    Serial.print(periodTime);
-    #if debug
-      Serial.print("us ");
-      Serial.print(successPercent);
-      Serial.print("%");
-    #endif
-    Serial.println();
-    
-    dshotResponseLast = dshotResponse;
+    if((dshotResponse != dshotResponseLast) || !debug) {
+      dshotResponseLast = dshotResponse;
+
+      uint32_t periodBase = value & 0b0000000111111111;
+      uint8_t periodShift = value >> 9 & 0b00000111;
+      uint32_t periodTime =  periodBase << periodShift;
+
+      if(crc == crcExpected) {
+        Serial.print("OK: ");
+      } else {
+        Serial.print("--: ");
+      }
+
+      #if debug
+        float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
+      #endif
+
+      Serial.print(periodTime);
+      #if debug
+        Serial.print("us ");
+        Serial.print(successPercent);
+        Serial.print("%");
+      #endif
+      Serial.println();
+    }
   }
 }
 
