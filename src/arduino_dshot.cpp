@@ -1,17 +1,17 @@
 #include "Arduino.h"
 #include "Dshot.h"
 
-FREQUENCY frequency = F500;
+const FREQUENCY frequency = F500;
 
 // Set inverted to true if you want bi-directional DShot
-bool inverted = true;
+#define inverted true
 
 // DSHOT Output pin
-unsigned int pinDshot = 8;
+const uint8_t pinDshot = 8;
 
 /* Initialization */
-unsigned long dshotResponse = 0;
-unsigned long dshotResponseLast = 0;
+uint32_t dshotResponse = 0;
+uint32_t dshotResponseLast = 0;
 uint16_t mappedLast = 0;
 
 // Buffer for counting duration between falling and rising edges
@@ -27,23 +27,12 @@ volatile uint16_t frame = dshot.buildFrame(0, 0);
 
 #define DELAY_CYCLES(n) __builtin_avr_delay_cycles(n)
 
-void sendBitsDshot300();
-void sendBitDshot300(uint8_t bit);
-void sendBitDshot300Inverted(uint8_t bit);
+void sendDshot300Frame();
+void sendDshot300Bit(uint8_t bit);
+void sendInvertedDshot300Bit(uint8_t bit);
+void processTelemetryResponse();
 
-void sendBitsDshot300() {
-  // Send Dshot frame
-  uint16_t temp = frame;
-  uint8_t offset = 0;
-  do{
-    if(inverted) {
-      sendBitDshot300Inverted((temp & 0x8000) >> 15);
-    } else {
-      sendBitDshot300((temp & 0x8000) >> 15);
-    }
-    temp <<= 1;
-  } while(++offset < 0x10);
-
+void processTelemetryResponse() {
   // Set to Input in order to process the response - this will be at 3.3V level
   pinMode(pinDshot, INPUT_PULLUP);
 
@@ -57,13 +46,13 @@ void sendBitsDshot300() {
 
   TCCR1A = 0b00000001; // Toggle OC1A on compare match
   TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off 
-  TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
   
   // Limit to 90us - that should be enough to fetch the whole response
   // at 2MHz - scale factor 11 - 180 ticks should be enough.
   OCR1A = 180;
   TCNT1 = 0x00;
 
+  TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
   for(pCapDat = counter; pCapDat <= &counter[buffSize - 1];) {
     // wait for edge or overflow (output compare match)
     while(!(tifr = (TIFR1 & ((1 << ICF1) | (1 << OCF1A))))) {}
@@ -106,6 +95,19 @@ void sendBitsDshot300() {
   dshotResponse ^= dshotResponse >> 1;
 }
 
+void sendDshot300Frame() {
+  uint16_t temp = frame;
+  uint8_t offset = 0;
+  do {
+    #if inverted
+      sendInvertedDshot300Bit((temp & 0x8000) >> 15);
+    #else
+      sendDshot300Bit((temp & 0x8000) >> 15);
+    #endif
+    temp <<= 1;
+  } while(++offset < 0x10);
+}
+
 /**
  * digitalWrite takes about 3.4us to execute, that's why we switch ports directly.
  * Switching ports directly will allow a transition in 0.19us or 190ns.
@@ -118,7 +120,7 @@ void sendBitsDshot300() {
  * 
  * The delays after switching back to low are to account for the overhead of going through the loop ins sendBitsDshot*
  */
-void sendBitDshot300Inverted(uint8_t bit) {
+void sendInvertedDshot300Bit(uint8_t bit) {
   if(bit) {
     PORTB = B00000000;
     //DELAY_CYCLES(40);
@@ -136,7 +138,7 @@ void sendBitDshot300Inverted(uint8_t bit) {
   }
 }
 
-void sendBitDshot300(uint8_t bit) {
+void sendDshot300Bit(uint8_t bit) {
   if(bit) {
     PORTB = B00000001;
     //DELAY_CYCLES(40);
@@ -161,36 +163,50 @@ void setupTimer() {
   TCCR2B = 0;
   TCNT2 = 0;
 
-  if(frequency == F500) {
-    // 500 Hz (16000000/((124 + 1) * 256))
-    OCR2A = 124;
-    TCCR2B |= 0b00000110; // Prescaler 256
-  } else if(frequency == F1k) {
-    // 1000 Hz (16000000/((124 + 1) * 128))
-    OCR2A = 124;
-    TCCR2B |= 0b00000101; // Prescaler 128
-  } else if(frequency == F2k) {
-    // 2000 Hz (16000000/((124 + 1) * 64))
-    OCR2A = 124;
-    TCCR2B |= 0b00000100; // Prescaler 64
-  } else if(frequency == F4k) {
-    // 4000 Hz (16000000/( (124 + 1) * 32))
-    OCR2A = 124;
-    TCCR2B |= 0b00000011; // Prescaler 32
-  } else {
-    // 8000 Hz (16000000/( (249 + 1) * 8))
-    OCR2A = 249;
-    TCCR2B |= 0b00000010; // Prescaler 8
+  switch(frequency) {
+    case F500: {
+      // 500 Hz (16000000/((124 + 1) * 256))
+      OCR2A = 124;
+      TCCR2B |= 0b00000110; // Prescaler 256
+    } break;
+
+    case F1k: {
+      // 1000 Hz (16000000/((124 + 1) * 128))
+      OCR2A = 124;
+      TCCR2B |= 0b00000101; // Prescaler 128
+    } break;
+
+    case F2k: {
+      // 2000 Hz (16000000/((124 + 1) * 64))
+      OCR2A = 124;
+      TCCR2B |= 0b00000100; // Prescaler 64
+    } break;
+
+    case F4k: {
+      // 4000 Hz (16000000/( (124 + 1) * 32))
+      OCR2A = 124;
+      TCCR2B |= 0b00000011; // Prescaler 32
+    } break;
+
+    default: {
+      // 8000 Hz (16000000/( (249 + 1) * 8))
+      OCR2A = 249;
+      TCCR2B |= 0b00000010; // Prescaler 8
+    } break;
   }
 
   TCCR2A |= 0b00001010; // CTC mode - count to OCR2A
-  TIMSK2 = 0b00000010;  // Enable INT on compare match A
+  TIMSK2 = 0b00000010; // Enable INT on compare match A
 
   sei();
 }
 
 ISR(TIMER2_COMPA_vect) {
-  sendBitsDshot300();
+  sendDshot300Frame();
+
+  #if inverted
+    processTelemetryResponse();
+  #endif
 }
 
 void setup() {
@@ -199,11 +215,12 @@ void setup() {
 
   pinMode(pinDshot, OUTPUT);
 
-  // Set pin high or low depending on inversion
-  PORTB = B00000000;
-  if(inverted) {
+  // Set the default signal Level
+  #if inverted
     PORTB = B00000001;
-  }
+  #else
+    PORTB = B00000000;
+  #endif
 
   Serial.println("Input throttle value to be sent to ESC");
   Serial.println("Valid throttle values are 47 - 2047");
