@@ -1,6 +1,26 @@
 #include "Arduino.h"
 #include "Dshot.h"
 
+/**
+ * Update frequencies from 2kHz onwards tend to cause issues in regards
+ * to processing the DShot response and will result in actual 3kHz instead.
+ *
+ * At this point the serial port will not be able to print anything anymore since
+ * interrupts are "queing" up, rendering the main loop basically non-functional.
+ *
+ * 8kHz can ONLY be achieved when sending (uninverted) Dshot und not processing
+ * responses.
+ *
+ * For real world use you should thus not go over 1kHz, better stay at 500Hz, this
+ * will give you some headroom in order to serial print some more data.
+ *
+ * The limit of sending at 1.7kHz shows that the time difference is the actual time
+ * that is needed to process the DShot response - so around 400us - 400kns or 6400
+ * clock cycles.
+ *
+ * Even if response processing can be sped up, at the higher frequencies we would
+ * still struggle to serial print the results.
+ */
 const FREQUENCY frequency = F500;
 
 // Set inverted to true if you want bi-directional DShot
@@ -8,6 +28,23 @@ const FREQUENCY frequency = F500;
 
 // DSHOT Output pin
 const uint8_t pinDshot = 8;
+
+/**
+ * If debug mode is enabled, more information is printed to the serial console:
+ * - Percentage of packages successfully received (CRC checksums match)
+ * - Information on startup
+ *
+ * With debug disabled output will look like so:
+ * --: 65408
+ * OK: 65408
+ *
+ * With debug enabled output will look like so:
+ * OK: 13696us 96.52%
+ * --: 65408us 96.43%
+ * OK: 13696us 96.43%
+ * OK: 22400us 96.44%
+ */
+#define debug true
 
 /* Initialization */
 uint32_t dshotResponse = 0;
@@ -22,6 +59,33 @@ uint16_t counter[buffSize];
 uint16_t receivedPackets = 0;
 uint16_t successPackets = 0;
 
+// Duration LUT - considerably faster than division
+const uint8_t duration[] = {
+  0,
+  0,
+  0,
+  0,
+  1, // 4
+  1, // 5 <
+  1, // 6
+  2, // 7
+  2,
+  2,
+  2, // 10 <
+  2,
+  2, // 12
+  3, // 13
+  3,
+  3, // 15 <
+  3,
+  3, // 17
+  4, // 18
+  4,
+  4, // 20 <
+  4,
+  4, // 22
+};
+
 Dshot dshot = new Dshot(inverted);
 volatile uint16_t frame = dshot.buildFrame(0, 0);
 
@@ -31,6 +95,8 @@ void sendDshot300Frame();
 void sendDshot300Bit(uint8_t bit);
 void sendInvertedDshot300Bit(uint8_t bit);
 void processTelemetryResponse();
+void readUpdate();
+void printResponse();
 
 void processTelemetryResponse() {
   // Set to Input in order to process the response - this will be at 3.3V level
@@ -47,9 +113,9 @@ void processTelemetryResponse() {
   TCCR1A = 0b00000001; // Toggle OC1A on compare match
   TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off 
   
-  // Limit to 90us - that should be enough to fetch the whole response
-  // at 2MHz - scale factor 11 - 180 ticks should be enough.
-  OCR1A = 180;
+  // Limit to 70us - that should be enough to fetch the whole response
+  // at 2MHz - scale factor 8 - 140 ticks should be enough.
+  OCR1A = 140;
   TCNT1 = 0x00;
 
   TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
@@ -83,18 +149,33 @@ void processTelemetryResponse() {
   unsigned long bitValue = 0x00;
   uint8_t bitCount = 0;
   for(uint8_t i = 1; i < buffSize; i += 1) {
-    bitValue ^= 0x01; // Toggle bit value - always start with 0
-    counter[i] = (counter[i] + 1) / 5; // TODO: Less than optimal, ranges would probably be better here...
+    // We are done once the first intereval has a 0 value.
+    if(counter[i] == 0) {
+      break;
+    }
 
+    bitValue ^= 0x01; // Toggle bit value - always start with 0
+    counter[i] = duration[counter[i]];
     for(uint8_t j = 0; j < counter[i]; j += 1) {
       dshotResponse ^= (bitValue << (20 - bitCount++));
     }
   }
 
-  // Decode GCR 21 -> 20 bit
-  dshotResponse ^= dshotResponse >> 1;
+  // Decode GCR 21 -> 20 bit (since the 21st bit is definetly a 0)
+  dshotResponse ^= (dshotResponse >> 1);
 }
 
+/**
+ * Frames are sent MSB first.
+ *
+ * Unfortunately we can't  rotate through carry on an ATMega.
+ * Thus we fetch MSB, left shift the result and then right shift the frame.
+ *
+ * IMPROVEMENT: Since this part is actually time critical, any improvement that can be
+ *              made is a good improvment. Thus when the frame is initially generated
+ *              it might make sense to arange it in a way that is benefitial for
+ *              transmission.
+ */
 void sendDshot300Frame() {
   uint16_t temp = frame;
   uint8_t offset = 0;
@@ -222,16 +303,18 @@ void setup() {
     PORTB = B00000000;
   #endif
 
-  Serial.println("Input throttle value to be sent to ESC");
-  Serial.println("Valid throttle values are 47 - 2047");
-  Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
-  Serial.print(frequency);
-  Serial.println("Hz");
+  #if debug
+    Serial.println("Input throttle value to be sent to ESC");
+    Serial.println("Valid throttle values are 47 - 2047");
+    Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
+    Serial.print(frequency);
+    Serial.println("Hz");
+  #endif
 
   setupTimer();
 }
 
-void loop() {
+void readUpdate() {
   // Serial read might not always trigger properly here since the timer might interrupt
   // Disabling the interrupts is not an option since Serial uses interrupts too.
   if(Serial.available() > 0) {
@@ -248,9 +331,10 @@ void loop() {
     Serial.print(" Value: ");
     Serial.println(dshotValue);
   }
+}
 
-  // Re-calculate the response values if DShot response did in fact change
-  if(dshotResponse != dshotResponseLast) {
+void printResponse() {
+  if((dshotResponse != dshotResponseLast) || !debug) {
     uint16_t mapped = dshot.mapTo16Bit(dshotResponse);
 
     uint8_t crc = mapped & 0x0F;
@@ -271,17 +355,27 @@ void loop() {
       Serial.print("--: ");
     }
 
-    // Reset packet count if overflows
-    if(!receivedPackets) {
-      successPackets = 0;
-    }
-    float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
+    #if debug
+      // Reset packet count if overflows
+      if(!receivedPackets) {
+        successPackets = 0;
+      }
+      float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
+    #endif
 
     Serial.print(periodTime);
-    Serial.print("us ");
-    Serial.print(successPercent);
-    Serial.println("%");
+    #if debug
+      Serial.print("us ");
+      Serial.print(successPercent);
+      Serial.print("%");
+    #endif
+    Serial.println();
     
     dshotResponseLast = dshotResponse;
   }
+}
+
+void loop() {
+  readUpdate();
+  printResponse();
 }
