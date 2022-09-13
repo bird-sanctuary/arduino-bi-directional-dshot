@@ -23,7 +23,7 @@ The Dshot value sent by default is **0**. Via serial console other values (up to
 ## How does it work?
 A timer triggers sending of the DShot frame via interrupt then the following things happen:
 
-1. B8 is set as output
+1. D8 is set as output
 2. Dshot frame is sent
 3. D8 is set as input
 4. Input capture on timer 1 is used to capture the time between falling and rising endges
