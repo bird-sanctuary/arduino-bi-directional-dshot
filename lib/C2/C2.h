@@ -3,6 +3,23 @@
 #ifndef C2_H
 #define C2_H
 
+enum C2Instruction {
+  DATA_READ = 0x00,
+  DATA_WRITE = 0x01,
+  ADDRESS_READ = 0x02,
+  ADDRESS_WRITE = 0x03,
+};
+
+enum C2Addresses {
+  FPDAT = 0xB4, // May be different for non EFM8 targets
+};
+
+enum C2Commands {
+  DEVICE_ERASE= 0x03,
+  BLOCK_READ = 0x06,
+  BLOCK_WRITE = 0x07,
+};
+
 class C2 {
   public:
     C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
@@ -23,7 +40,7 @@ class C2 {
     uint8_t pollBitHigh(uint8_t mask);
     uint8_t pollBitLow(uint8_t mask);
 
-    uint8_t readFlashBlock(uint16_t address, uint8_t *data, uint8_t length);
+    uint8_t readFlashBlock(uint16_t address, uint8_t *data, uint8_t bytes);
     uint8_t writeFlashBlock(uint16_t address, uint8_t *data, uint8_t length);
     uint8_t eraseDevice();
 
@@ -32,6 +49,18 @@ class C2 {
     uint8_t updateState(uint8_t data);
 
     volatile uint8_t *getMessage();
+
+    void sendByte(uint8_t byte);
+    uint8_t readByte();
+
+    void sendStopBit();
+    uint8_t waitForResponse();
+
+    void sendAddressReadInstruction();
+    void sendDataReadInstruction(uint8_t byte);
+
+    void sendAddressWriteInstruction();
+    void sendDataWriteInstruction(uint8_t byte);
 
     void setup();
     void loop();
