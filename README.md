@@ -35,7 +35,9 @@ A timer triggers sending of the DShot frame via interrupt then the following thi
 I recommend you use Visual Studio Code with the platform IO plugin. A **platformio.ini** is included in the repository with a working serial monitor configuration.
 
 ## C2 Interface
-This sketch also includes a C2 interface for your convenience, allowing to read, write and erase an EFM8 MCU. This will require you to install the EFM8 python client.
+This sketch also includes a C2 interface for your convenience, allowing to read, write and erase an EFM8 MCU. This will require you to install the EFM8 python client. Also by default the Arduino will start in DShot mode, to enable the C2 interface, pull pin 13 low and reset the arduino.
+
+To switch back to DShot mode, remove the jumper to low form pin 13 and reset the arduino.
 
 ### Installing python EFM8 client
 use pipenv to create an virtual env, install dependencies and enter the env:
