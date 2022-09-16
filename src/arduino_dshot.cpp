@@ -1,17 +1,61 @@
 #include "Arduino.h"
 #include "Dshot.h"
+#include "C2.h"
 
-FREQUENCY frequency = F500;
+/**
+ * Update frequencies from 2kHz onwards tend to cause issues in regards
+ * to processing the DShot response and will result in actual 3kHz instead.
+ *
+ * At this point the serial port will not be able to print anything anymore since
+ * interrupts are "queing" up, rendering the main loop basically non-functional.
+ *
+ * 8kHz can ONLY be achieved when sending (uninverted) Dshot und not processing
+ * responses.
+ *
+ * For real world use you should thus not go over 1kHz, better stay at 500Hz, this
+ * will give you some headroom in order to serial print some more data.
+ *
+ * The limit of sending at 3kHz shows that the time difference is the actual time
+ * that is needed to process the DShot response - so around 400us - 400kns or 6400
+ * clock cycles.
+ *
+ * Even if response processing can be sped up, at the higher frequencies we would
+ * still struggle to serial print the results.
+ */
+const FREQUENCY frequency = F500;
 
 // Set inverted to true if you want bi-directional DShot
-bool inverted = true;
+#define inverted true
 
 // DSHOT Output pin
-unsigned int pinDshot = 8;
+const uint8_t pinDshot = 8;
+
+/**
+ * If debug mode is enabled, more information is printed to the serial console:
+ * - Percentage of packages successfully received (CRC checksums match)
+ * - Information on startup
+ *
+ * With debug disabled output will look like so:
+ * --: 65408
+ * OK: 65408
+ *
+ * With debug enabled output will look like so:
+ * OK: 13696us 96.52%
+ * --: 65408us 96.43%
+ * OK: 13696us 96.43%
+ * OK: 22400us 96.44%
+ */
+#define debug true
+
+// If this pin is pulled low, then the device starts in C2 interface mode
+#define C2_ENABLE_PIN 13
+#define C2_PORT PORTD
+#define C2D_PIN 2
+#define C2CK_PIN 3
 
 /* Initialization */
-unsigned long dshotResponse = 0;
-unsigned long dshotResponseLast = 0;
+uint32_t dshotResponse = 0;
+uint32_t dshotResponseLast = 0;
 uint16_t mappedLast = 0;
 
 // Buffer for counting duration between falling and rising edges
@@ -22,28 +66,54 @@ uint16_t counter[buffSize];
 uint16_t receivedPackets = 0;
 uint16_t successPackets = 0;
 
+bool newResponse = false;
+bool hasEsc = false;
+
+bool c2Mode = false;
+C2 *c2;
+
+// Duration LUT - considerably faster than division
+const uint8_t duration[] = {
+  0,
+  0,
+  0,
+  0,
+  1, // 4
+  1, // 5 <
+  1, // 6
+  2, // 7
+  2,
+  2,
+  2, // 10 <
+  2,
+  2, // 12
+  3, // 13
+  3,
+  3, // 15 <
+  3,
+  3, // 17
+
+  // There should not be more than 3 bits with the same state after each other
+  4, // 18
+  4,
+  4, // 20 <
+  4,
+  4, // 22
+};
+
 Dshot dshot = new Dshot(inverted);
 volatile uint16_t frame = dshot.buildFrame(0, 0);
 
 #define DELAY_CYCLES(n) __builtin_avr_delay_cycles(n)
 
-void sendBitsDshot300();
-void sendBitDshot300(uint8_t bit);
-void sendBitDshot300Inverted(uint8_t bit);
+void sendDshot300Frame();
+void sendDshot300Bit(uint8_t bit);
+void sendInvertedDshot300Bit(uint8_t bit);
+void processTelemetryResponse();
+void readUpdate();
+void printResponse();
 
-void sendBitsDshot300() {
-  // Send Dshot frame
-  uint16_t temp = frame;
-  uint8_t offset = 0;
-  do{
-    if(inverted) {
-      sendBitDshot300Inverted((temp & 0x8000) >> 15);
-    } else {
-      sendBitDshot300((temp & 0x8000) >> 15);
-    }
-    temp <<= 1;
-  } while(++offset < 0x10);
-
+void processTelemetryResponse() {
   // Set to Input in order to process the response - this will be at 3.3V level
   pinMode(pinDshot, INPUT_PULLUP);
 
@@ -56,14 +126,14 @@ void sendBitsDshot300() {
   register uint16_t *pCapDat;
 
   TCCR1A = 0b00000001; // Toggle OC1A on compare match
-  TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off 
-  TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
-  
-  // Limit to 90us - that should be enough to fetch the whole response
-  // at 2MHz - scale factor 11 - 180 ticks should be enough.
-  OCR1A = 180;
+  TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off
+
+  // Limit to 70us - that should be enough to fetch the whole response
+  // at 2MHz - scale factor 8 - 150 ticks seems to be a sweetspot.
+  OCR1A = 150;
   TCNT1 = 0x00;
 
+  TIFR1 = (1 << ICF1) | (1 << OCF1A) | (1 << TOV1); // clear all timer flags
   for(pCapDat = counter; pCapDat <= &counter[buffSize - 1];) {
     // wait for edge or overflow (output compare match)
     while(!(tifr = (TIFR1 & ((1 << ICF1) | (1 << OCF1A))))) {}
@@ -80,7 +150,7 @@ void sendBitsDshot300() {
 
     TCCR1B ^= ices1High; // toggle the trigger edge
     TIFR1 = (1 << ICF1) | (1 << OCF1A); // clear input capture and output compare flag bit
-    
+
     *pCapDat = val - prevVal;
 
     prevVal = val;
@@ -94,31 +164,59 @@ void sendBitsDshot300() {
   unsigned long bitValue = 0x00;
   uint8_t bitCount = 0;
   for(uint8_t i = 1; i < buffSize; i += 1) {
-    bitValue ^= 0x01; // Toggle bit value - always start with 0
-    counter[i] = (counter[i] + 1) / 5; // TODO: Less than optimal, ranges would probably be better here...
+    // We are done once the first intereval has a 0 value.
+    if(counter[i] == 0) {
+      break;
+    }
 
+    bitValue ^= 0x01; // Toggle bit value - always start with 0
+    counter[i] = duration[counter[i]];
     for(uint8_t j = 0; j < counter[i]; j += 1) {
       dshotResponse ^= (bitValue << (20 - bitCount++));
     }
   }
 
-  // Decode GCR 21 -> 20 bit
-  dshotResponse ^= dshotResponse >> 1;
+  // Decode GCR 21 -> 20 bit (since the 21st bit is definetly a 0)
+  dshotResponse ^= (dshotResponse >> 1);
+}
+
+/**
+ * Frames are sent MSB first.
+ *
+ * Unfortunately we can't  rotate through carry on an ATMega.
+ * Thus we fetch MSB, left shift the result and then right shift the frame.
+ *
+ * IMPROVEMENT: Since this part is actually time critical, any improvement that can be
+ *              made is a good improvment. Thus when the frame is initially generated
+ *              it might make sense to arange it in a way that is benefitial for
+ *              transmission.
+ */
+void sendDshot300Frame() {
+  uint16_t temp = frame;
+  uint8_t offset = 0;
+  do {
+    #if inverted
+      sendInvertedDshot300Bit((temp & 0x8000) >> 15);
+    #else
+      sendDshot300Bit((temp & 0x8000) >> 15);
+    #endif
+    temp <<= 1;
+  } while(++offset < 0x10);
 }
 
 /**
  * digitalWrite takes about 3.4us to execute, that's why we switch ports directly.
  * Switching ports directly will allow a transition in 0.19us or 190ns.
- * 
+ *
  * In an optimal case, without any lag for sending a "1" we would switch high, stay high for 2500 ns (40 ticks) and then switch back to low.
  * Since a transition takes some time too, we need to adjust the waiting period accordingly. Ther resulting values have been set using an
  * oscilloscope to validate the delay cycles.
- * 
+ *
  * Duration for a single byte should be 1/300kHz = 3333.33ns = 3.3us or 53.3 ticks
- * 
+ *
  * The delays after switching back to low are to account for the overhead of going through the loop ins sendBitsDshot*
  */
-void sendBitDshot300Inverted(uint8_t bit) {
+void sendInvertedDshot300Bit(uint8_t bit) {
   if(bit) {
     PORTB = B00000000;
     //DELAY_CYCLES(40);
@@ -136,7 +234,7 @@ void sendBitDshot300Inverted(uint8_t bit) {
   }
 }
 
-void sendBitDshot300(uint8_t bit) {
+void sendDshot300Bit(uint8_t bit) {
   if(bit) {
     PORTB = B00000001;
     //DELAY_CYCLES(40);
@@ -161,60 +259,79 @@ void setupTimer() {
   TCCR2B = 0;
   TCNT2 = 0;
 
-  if(frequency == F500) {
-    // 500 Hz (16000000/((124 + 1) * 256))
-    OCR2A = 124;
-    TCCR2B |= 0b00000110; // Prescaler 256
-  } else if(frequency == F1k) {
-    // 1000 Hz (16000000/((124 + 1) * 128))
-    OCR2A = 124;
-    TCCR2B |= 0b00000101; // Prescaler 128
-  } else if(frequency == F2k) {
-    // 2000 Hz (16000000/((124 + 1) * 64))
-    OCR2A = 124;
-    TCCR2B |= 0b00000100; // Prescaler 64
-  } else if(frequency == F4k) {
-    // 4000 Hz (16000000/( (124 + 1) * 32))
-    OCR2A = 124;
-    TCCR2B |= 0b00000011; // Prescaler 32
-  } else {
-    // 8000 Hz (16000000/( (249 + 1) * 8))
-    OCR2A = 249;
-    TCCR2B |= 0b00000010; // Prescaler 8
+  switch(frequency) {
+    case F500: {
+      // 500 Hz (16000000/((124 + 1) * 256))
+      OCR2A = 124;
+      TCCR2B |= 0b00000110; // Prescaler 256
+    } break;
+
+    case F1k: {
+      // 1000 Hz (16000000/((124 + 1) * 128))
+      OCR2A = 124;
+      TCCR2B |= 0b00000101; // Prescaler 128
+    } break;
+
+    case F2k: {
+      // 2000 Hz (16000000/((124 + 1) * 64))
+      OCR2A = 124;
+      TCCR2B |= 0b00000100; // Prescaler 64
+    } break;
+
+    case F4k: {
+      // 4000 Hz (16000000/( (124 + 1) * 32))
+      OCR2A = 124;
+      TCCR2B |= 0b00000011; // Prescaler 32
+    } break;
+
+    default: {
+      // 8000 Hz (16000000/( (249 + 1) * 8))
+      OCR2A = 249;
+      TCCR2B |= 0b00000010; // Prescaler 8
+    } break;
   }
 
   TCCR2A |= 0b00001010; // CTC mode - count to OCR2A
-  TIMSK2 = 0b00000010;  // Enable INT on compare match A
+  TIMSK2 = 0b00000010; // Enable INT on compare match A
 
   sei();
 }
 
 ISR(TIMER2_COMPA_vect) {
-  sendBitsDshot300();
+  sendDshot300Frame();
+
+  #if inverted
+    processTelemetryResponse();
+    newResponse = true;
+  #endif
 }
 
-void setup() {
+void dshotSetup() {
   Serial.begin(115200);
   while(!Serial);
 
   pinMode(pinDshot, OUTPUT);
 
-  // Set pin high or low depending on inversion
-  PORTB = B00000000;
-  if(inverted) {
+  // Set the default signal Level
+  #if inverted
     PORTB = B00000001;
-  }
+  #else
+    PORTB = B00000000;
+  #endif
 
-  Serial.println("Input throttle value to be sent to ESC");
-  Serial.println("Valid throttle values are 47 - 2047");
-  Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
-  Serial.print(frequency);
-  Serial.println("Hz");
+  #if debug
+    Serial.println("Input throttle value to be sent to ESC");
+    Serial.println("Valid throttle values are 47 - 2047");
+    Serial.println("Lines are only printed if the value changed");
+    Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
+    Serial.print(frequency);
+    Serial.println("Hz");
+  #endif
 
   setupTimer();
 }
 
-void loop() {
+void readUpdate() {
   // Serial read might not always trigger properly here since the timer might interrupt
   // Disabling the interrupts is not an option since Serial uses interrupts too.
   if(Serial.available() > 0) {
@@ -231,40 +348,90 @@ void loop() {
     Serial.print(" Value: ");
     Serial.println(dshotValue);
   }
+}
 
-  // Re-calculate the response values if DShot response did in fact change
-  if(dshotResponse != dshotResponseLast) {
+void printResponse() {
+  if(newResponse) {
+    newResponse  = false;
+
     uint16_t mapped = dshot.mapTo16Bit(dshotResponse);
-
     uint8_t crc = mapped & 0x0F;
     uint16_t value = mapped >> 4;
     uint8_t crcExpected = dshot.calculateCrc(value);
 
-    uint32_t periodBase = value & 0b0000000111111111;
-    uint8_t periodShift = value >> 9 & 0b00000111;
-    uint32_t periodTime =  periodBase << periodShift;
+    // Wait for a first valid response
+    if(!hasEsc) {
+      if(crc == crcExpected) {
+        hasEsc = true;
+      }
 
-    // Calculation of success rate is a bit flawed since it will not update for every response
-    // If we want to havae this, we would need to move calculation to the interrupt too.
+      return;
+    }
+
+    // Calculate success rate - percentage of packeges on which CRC matched the value
     receivedPackets++;
     if(crc == crcExpected) {
       successPackets++;
-      Serial.print("OK: ");
-    } else {
-      Serial.print("--: ");
     }
 
     // Reset packet count if overflows
     if(!receivedPackets) {
       successPackets = 0;
     }
-    float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
 
-    Serial.print(periodTime);
-    Serial.print("us ");
-    Serial.print(successPercent);
-    Serial.println("%");
-    
-    dshotResponseLast = dshotResponse;
+    if((dshotResponse != dshotResponseLast) || !debug) {
+      dshotResponseLast = dshotResponse;
+
+      uint32_t periodBase = value & 0b0000000111111111;
+      uint8_t periodShift = value >> 9 & 0b00000111;
+      uint32_t periodTime =  periodBase << periodShift;
+
+      if(crc == crcExpected) {
+        Serial.print("OK: ");
+      } else {
+        Serial.print("--: ");
+      }
+
+      #if debug
+        float successPercent = (successPackets * 1.0 / receivedPackets * 1.0) * 100;
+      #endif
+
+      Serial.print(periodTime);
+      #if debug
+        Serial.print("us ");
+        Serial.print(successPercent);
+        Serial.print("%");
+      #endif
+      Serial.println();
+    }
+  }
+}
+
+void dshotLoop() {
+  readUpdate();
+  printResponse();
+}
+
+void c2Setup() {
+  c2 = new C2(&C2_PORT, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
+  c2->setup();
+}
+
+void setup() {
+  pinMode(C2_ENABLE_PIN, INPUT_PULLUP);
+  c2Mode = !digitalRead(C2_ENABLE_PIN);
+
+  if(c2Mode) {
+    c2Setup();
+  } else {
+    dshotSetup();
+  }
+}
+
+void loop() {
+  if(c2Mode) {
+    c2->loop();
+  } else {
+    dshotLoop();
   }
 }

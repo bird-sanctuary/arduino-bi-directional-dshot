@@ -23,7 +23,7 @@ The Dshot value sent by default is **0**. Via serial console other values (up to
 ## How does it work?
 A timer triggers sending of the DShot frame via interrupt then the following things happen:
 
-1. B8 is set as output
+1. D8 is set as output
 2. Dshot frame is sent
 3. D8 is set as input
 4. Input capture on timer 1 is used to capture the time between falling and rising endges
@@ -33,6 +33,26 @@ A timer triggers sending of the DShot frame via interrupt then the following thi
 
 ## Usage
 I recommend you use Visual Studio Code with the platform IO plugin. A **platformio.ini** is included in the repository with a working serial monitor configuration.
+
+## C2 Interface
+This sketch also includes a C2 interface for your convenience, allowing to read, write and erase an EFM8 MCU. This will require you to install the EFM8 python client. Also by default the Arduino will start in DShot mode, to enable the C2 interface, pull pin 13 low and reset the arduino.
+
+To switch back to DShot mode, remove the jumper to low form pin 13 and reset the arduino.
+
+### Installing python EFM8 client
+use pipenv to create an virtual env, install dependencies and enter the env:
+```
+pipenv install
+pipenv shell
+```
+
+then run the client like so:
+
+```
+python efm8.py read /dev/ttyUSB0 output.hex
+python efm8.py write /dev/ttyUSB0 input.hex
+python efm8.py erase
+```
 
 ## Compatibility
 This should work on any Arduino Uno or clone running at 16MHz. If you are using a different Arduino board, make sure you are using (and setting) the pin which has the "Input Capture" functionality.
