@@ -1,7 +1,6 @@
 #include "C2.h"
 
 C2::C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed) {
-  //C2::C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD) {
   _port = port;
   _pinCk = pinCk;
   _pinD = pinD;
@@ -222,7 +221,7 @@ uint8_t C2::updateState(uint8_t data) {
         _messagePtr = 0;
         _message[_messagePtr++] = data;
 
-        return 1;
+        _state = 1;
     } break;
 
     case 0x01: {
@@ -230,10 +229,12 @@ uint8_t C2::updateState(uint8_t data) {
         _message[_messagePtr++] = data;
 
         if(_bytesLeft == 0) {
-          return 3;
+          _state = 3;
+
+          break;
         }
 
-        return 2;
+        _state = 2;
     } break;
 
     case 0x02: {
@@ -241,7 +242,7 @@ uint8_t C2::updateState(uint8_t data) {
         _bytesLeft--;
 
         if(_bytesLeft == 0) {
-          return 3;
+          _state = 3;
         }
     } break;
   }
@@ -249,7 +250,7 @@ uint8_t C2::updateState(uint8_t data) {
   return _state;
 }
 
-uint8_t *C2::getMessage() {
+volatile uint8_t *C2::getMessage() {
   return _message;
 }
 
@@ -272,11 +273,11 @@ void C2::loop() {
 
   if(Serial.available()) {
     uint8_t data = Serial.read();
-    _state = updateState(data);
-    uint8_t *message = getMessage();
+    updateState(data);
+    //uint8_t *message = getMessage();
 
     if(_state == 3) {
-      switch(message[0]) {
+      switch(_message[0]) {
         case 0x00: {
           Serial.write(0x80);
         } break;
@@ -300,15 +301,15 @@ void C2::loop() {
         } break;
 
         case 0x03: {
-          address = (((unsigned long)(message[4]))<<8) + (((unsigned long)(message[5]))<<0);
-          crc = message[6];
-          newcrc = message[5] + message[4];
-          for(uint8_t i = 0; i < message[2]; i+= 1) {
-            _flashBuffer[i] = message[i+7];
+          address = (((unsigned long)(_message[4]))<<8) + (((unsigned long)(_message[5]))<<0);
+          crc = _message[6];
+          newcrc = _message[5] + _message[4];
+          for(uint8_t i = 0; i < _message[2]; i+= 1) {
+            _flashBuffer[i] = _message[i+7];
           }
 
 
-          for(uint8_t i = 0; i < message[2]; i += 1) {
+          for(uint8_t i = 0; i < _message[2]; i += 1) {
             newcrc += _flashBuffer[i];
           }
 
@@ -317,7 +318,7 @@ void C2::loop() {
             break;
           }
 
-          uint8_t ch = message[2];
+          uint8_t ch = _message[2];
           writeFlashBlock(address, _flashBuffer, ch);
           Serial.write(0x83);
 
@@ -334,9 +335,9 @@ void C2::loop() {
         case 0x05: {
           Serial.write(0x85);
 
-          address = (((unsigned long)(message[3]))<<16) + (((unsigned long)(message[4]))<<8) + (((unsigned long)(message[5]))<<0);
-          readFlashBlock(address, _flashBuffer, message[2]);
-          for(uint8_t i = 0; i < message[2]; i += 1) {
+          address = (((unsigned long)(_message[3]))<<16) + (((unsigned long)(_message[4]))<<8) + (((unsigned long)(_message[5]))<<0);
+          readFlashBlock(address, _flashBuffer, _message[2]);
+          for(uint8_t i = 0; i < _message[2]; i += 1) {
             Serial.write(_flashBuffer[i]);
           }
 
@@ -344,15 +345,15 @@ void C2::loop() {
         } break;
 
         case 0x06: {
-          writeAddress(message[3]);
-          writeData(message[4]);
+          writeAddress(_message[3]);
+          writeData(_message[4]);
           Serial.write(0x86);
 
           resetState();
         } break;
 
         case 0x07: {
-          writeAddress(message[3]);
+          writeAddress(_message[3]);
           Serial.write(readData());
           Serial.write(0x87);
 

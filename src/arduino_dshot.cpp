@@ -1,5 +1,6 @@
 #include "Arduino.h"
 #include "Dshot.h"
+#include "C2.h"
 
 /**
  * Update frequencies from 2kHz onwards tend to cause issues in regards
@@ -14,7 +15,7 @@
  * For real world use you should thus not go over 1kHz, better stay at 500Hz, this
  * will give you some headroom in order to serial print some more data.
  *
- * The limit of sending at 1.7kHz shows that the time difference is the actual time
+ * The limit of sending at 3kHz shows that the time difference is the actual time
  * that is needed to process the DShot response - so around 400us - 400kns or 6400
  * clock cycles.
  *
@@ -46,6 +47,12 @@ const uint8_t pinDshot = 8;
  */
 #define debug true
 
+// If this pin is pulled low, then the device starts in C2 interface mode
+#define C2_ENABLE_PIN 13
+#define C2_PORT PORTD
+#define C2D_PIN 2
+#define C2CK_PIN 3
+
 /* Initialization */
 uint32_t dshotResponse = 0;
 uint32_t dshotResponseLast = 0;
@@ -61,6 +68,9 @@ uint16_t successPackets = 0;
 
 bool newResponse = false;
 bool hasEsc = false;
+
+bool c2Mode = false;
+C2 *c2;
 
 // Duration LUT - considerably faster than division
 const uint8_t duration[] = {
@@ -116,8 +126,8 @@ void processTelemetryResponse() {
   register uint16_t *pCapDat;
 
   TCCR1A = 0b00000001; // Toggle OC1A on compare match
-  TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off 
-  
+  TCCR1B = 0b00000010; // trigger on falling edge, prescaler 8, filter off
+
   // Limit to 70us - that should be enough to fetch the whole response
   // at 2MHz - scale factor 8 - 150 ticks seems to be a sweetspot.
   OCR1A = 150;
@@ -140,7 +150,7 @@ void processTelemetryResponse() {
 
     TCCR1B ^= ices1High; // toggle the trigger edge
     TIFR1 = (1 << ICF1) | (1 << OCF1A); // clear input capture and output compare flag bit
-    
+
     *pCapDat = val - prevVal;
 
     prevVal = val;
@@ -197,13 +207,13 @@ void sendDshot300Frame() {
 /**
  * digitalWrite takes about 3.4us to execute, that's why we switch ports directly.
  * Switching ports directly will allow a transition in 0.19us or 190ns.
- * 
+ *
  * In an optimal case, without any lag for sending a "1" we would switch high, stay high for 2500 ns (40 ticks) and then switch back to low.
  * Since a transition takes some time too, we need to adjust the waiting period accordingly. Ther resulting values have been set using an
  * oscilloscope to validate the delay cycles.
- * 
+ *
  * Duration for a single byte should be 1/300kHz = 3333.33ns = 3.3us or 53.3 ticks
- * 
+ *
  * The delays after switching back to low are to account for the overhead of going through the loop ins sendBitsDshot*
  */
 void sendInvertedDshot300Bit(uint8_t bit) {
@@ -296,7 +306,7 @@ ISR(TIMER2_COMPA_vect) {
   #endif
 }
 
-void setup() {
+void dshotSetup() {
   Serial.begin(115200);
   while(!Serial);
 
@@ -397,7 +407,31 @@ void printResponse() {
   }
 }
 
-void loop() {
+void dshotLoop() {
   readUpdate();
   printResponse();
+}
+
+void c2Setup() {
+  c2 = new C2(&C2_PORT, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
+  c2->setup();
+}
+
+void setup() {
+  pinMode(C2_ENABLE_PIN, INPUT_PULLUP);
+  c2Mode = !digitalRead(C2_ENABLE_PIN);
+
+  if(c2Mode) {
+    c2Setup();
+  } else {
+    dshotSetup();
+  }
+}
+
+void loop() {
+  if(c2Mode) {
+    c2->loop();
+  } else {
+    dshotLoop();
+  }
 }

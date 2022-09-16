@@ -6,7 +6,6 @@
 class C2 {
   public:
     C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
-    //C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD);
 
     void init();
     void reset();
@@ -32,7 +31,7 @@ class C2 {
     uint8_t getState();
     uint8_t updateState(uint8_t data);
 
-    uint8_t *getMessage();
+    volatile uint8_t *getMessage();
 
     void setup();
     void loop();

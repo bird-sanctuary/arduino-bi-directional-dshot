@@ -34,6 +34,24 @@ A timer triggers sending of the DShot frame via interrupt then the following thi
 ## Usage
 I recommend you use Visual Studio Code with the platform IO plugin. A **platformio.ini** is included in the repository with a working serial monitor configuration.
 
+## C2 Interface
+This sketch also includes a C2 interface for your convenience, allowing to read, write and erase an EFM8 MCU. This will require you to install the EFM8 python client.
+
+### Installing python EFM8 client
+use pipenv to create an virtual env, install dependencies and enter the env:
+```
+pipenv install
+pipenv shell
+```
+
+then run the client like so:
+
+```
+python efm8.py read /dev/ttyUSB0 output.hex
+python efm8.py write /dev/ttyUSB0 input.hex
+python efm8.py erase
+```
+
 ## Compatibility
 This should work on any Arduino Uno or clone running at 16MHz. If you are using a different Arduino board, make sure you are using (and setting) the pin which has the "Input Capture" functionality.
 
