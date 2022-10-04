@@ -20,6 +20,19 @@ The Dshot value sent by default is **0**. Via serial console other values (up to
 
 > Be aware that due to the nature of Dshot frames being sent continuously it might happen that serial Input is not processed immediately or only chunks arrive. There is not much that can be done which would not involve messing with the timing of the DShot frames being sent/received.
 
+### Extended Dshot
+If extended Dshot is enable you can activate it by sending command 13. This will then print all available Extended Dshot telemetry values:
+
+* Temperature
+* Voltage
+* Curreent
+* Debug Value 1
+* Debug Value 2
+* Debug Value 3
+* State flag
+
+> Be aware that not all telemetry values are available on all ESCs. BLheli ESCs on [Bluejay](https://github.com/bird-sanctuary/bluejay) will only display temperature by default.
+
 ## How does it work?
 A timer triggers sending of the DShot frame via interrupt then the following things happen:
 
