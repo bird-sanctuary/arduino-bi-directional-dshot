@@ -27,6 +27,9 @@ const FREQUENCY frequency = F500;
 // Set inverted to true if you want bi-directional DShot
 #define inverted true
 
+// Enable Extended Dshot Telemetry
+bool enableEdt = true;
+
 // DSHOT Output pin
 const uint8_t pinDshot = 8;
 
@@ -103,6 +106,16 @@ const uint8_t duration[] = {
 
 Dshot dshot = new Dshot(inverted);
 volatile uint16_t frame = dshot.buildFrame(0, 0);
+
+volatile uint8_t edtTemperature = 0;
+volatile uint8_t edtVoltage = 0;
+volatile uint8_t edtCurrent = 0;
+volatile uint8_t edtDebug1 = 0;
+volatile uint8_t edtDebug2 = 0;
+volatile uint8_t edtDebug3 = 0;
+volatile uint8_t edtState = 0;
+
+uint32_t lastPeriodTime = 0;
 
 #define DELAY_CYCLES(n) __builtin_avr_delay_cycles(n)
 
@@ -326,6 +339,12 @@ void dshotSetup() {
     Serial.print("Frames are sent repeatadly in the chosen update frequency: ");
     Serial.print(frequency);
     Serial.println("Hz");
+
+    if(enableEdt) {
+      Serial.println();
+      Serial.println("Send 13 to enable extended DShot telemetry");
+      Serial.println("CAUTION: EDT is disabled once disarmed (sending 0 after non 0 throttle value)");
+    }
   #endif
 
   setupTimer();
@@ -338,10 +357,19 @@ void readUpdate() {
     uint16_t dshotValue = Serial.parseInt(SKIP_NONE);
     Serial.read();
 
-    if (dshotValue > 2047) {
+    if(dshotValue > 2047) {
       dshotValue = 2047;
     }
     frame = dshot.buildFrame(dshotValue, 0);
+
+    if(dshotValue == 13) {
+      /**
+       * Lazy solution: Technically this command should be sent exactly six times
+       * to enable EDT. But sending it at least 6 times does not have any side
+       * effect, so we just send it until a proper throttle value is provided.
+       */
+      frame = dshot.buildFrame(13, 1);
+    }
 
     Serial.print("> Frame: ");
     Serial.print(frame, BIN);
@@ -382,9 +410,43 @@ void printResponse() {
     if((dshotResponse != dshotResponseLast) || !debug) {
       dshotResponseLast = dshotResponse;
 
+      // DShot Frame: EEEMMMMMMMMM
       uint32_t periodBase = value & 0b0000000111111111;
       uint8_t periodShift = value >> 9 & 0b00000111;
       uint32_t periodTime =  periodBase << periodShift;
+
+      uint8_t packageType = value >> 8 & 0b00001111;
+
+      if(enableEdt) {
+        /**
+         * Extended DShot Frame: PPPEMMMMMMMM
+         *
+         * In extended Dshot the first bit after after
+         * the exponent indicated if it is telemetry
+         *
+         * A 0 bit indicates telemetry, in this case
+         * the exponent maps to a certain type of telemetry.
+         *
+         * A telemetry package only happens every n packages
+         * and it does not include ERPM data, it is assumed
+         * that the previous ERPM value is still valid.
+         */
+        if((packageType & 0x01) == 0) {
+          switch(packageType) {
+            case 0x02: edtTemperature = periodBase; break;
+            case 0x04: edtVoltage = periodBase; break;
+            case 0x06: edtCurrent = periodBase; break;
+            case 0x08: edtDebug1 = periodBase; break;
+            case 0x0A: edtDebug2 = periodBase; break;
+            case 0x0C: edtDebug3 = periodBase; break;
+            case 0x0E: edtState = periodBase; break;
+          }
+
+          periodTime = lastPeriodTime;
+        } else {
+          lastPeriodTime = periodTime;
+        }
+      }
 
       if(crc == crcExpected) {
         Serial.print("OK: ");
@@ -399,8 +461,34 @@ void printResponse() {
       Serial.print(periodTime);
       #if debug
         Serial.print("us ");
-        Serial.print(successPercent);
+        Serial.print(round(successPercent));
         Serial.print("%");
+
+        if(enableEdt) {
+          Serial.print(" EDT: ");
+          Serial.print(edtTemperature);
+          Serial.print("°C");
+
+          Serial.print(" | ");
+          Serial.print(edtVoltage * 0.25);
+          Serial.print("V");
+
+          Serial.print(" | ");
+          Serial.print(edtCurrent);
+          Serial.print("A");
+
+          Serial.print(" | D1: ");
+          Serial.print(edtCurrent);
+
+          Serial.print(" | D2: ");
+          Serial.print(edtCurrent);
+
+          Serial.print(" | D3: ");
+          Serial.print(edtCurrent);
+
+          Serial.print(" | S: ");
+          Serial.print(edtState);
+        }
       #endif
       Serial.println();
     }
@@ -425,6 +513,12 @@ void setup() {
     c2Setup();
   } else {
     dshotSetup();
+
+    /*
+    if(enableEdt) {
+      frame = dshot.buildFrame(13, 1);
+    }
+    */
   }
 }
 
