@@ -478,13 +478,13 @@ void printResponse() {
           Serial.print("A");
 
           Serial.print(" | D1: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug1);
 
           Serial.print(" | D2: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug2);
 
           Serial.print(" | D3: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug3);
 
           Serial.print(" | S: ");
           Serial.print(edtState);
