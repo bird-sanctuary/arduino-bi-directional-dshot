@@ -107,10 +107,18 @@ class ProgrammingInterface:
 
     self.reset()
 
+  def deviceInfo(self):
+    self.serial.write(b"\x08\x00")
+    assert self.serial.read(1) == b"\x88"
+    deviceId = self.serial.read(1)
+    revision = self.serial.read(1)
+    print("Device:   0x%s" % deviceId.hex())
+    print("Revision: 0x%s" % revision.hex())
+
 parser = argparse.ArgumentParser(description='Interact with the Arduino based EFM8 C2 interface')
 parser.add_argument('action', metavar='ACTION', type=str,
                     help='Action to perform: read, write or erase',
-                    choices=['read', 'write', 'erase'],)
+                    choices=['read', 'write', 'erase', 'info'],)
 parser.add_argument('port', metavar='PORT', type=str,
                     help='Port to use')
 parser.add_argument('destination', metavar='DESTINATION', type=str, nargs='?', default=None,
@@ -121,8 +129,7 @@ parser.add_argument('destination', metavar='DESTINATION', type=str, nargs='?', d
 args = parser.parse_args()
 interface = ProgrammingInterface(args.port)
 interface.initialize()
-
-# TODO: Identify the device
+interface.deviceInfo()
 
 if args.action == 'read':
   if not args.destination:
