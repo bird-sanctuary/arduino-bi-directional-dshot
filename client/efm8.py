@@ -12,6 +12,16 @@ class ProgrammingInterface:
     # Give Arduino some time
     time.sleep(2)
 
+  def getReadRequest(slef, address, amount):
+    return [
+        0x05, 0x05,
+        amount,
+        (address >> 16) & 0xFF,
+        (address >> 8) & 0xFF,
+        address & 0xFF,
+        0x00,
+    ]
+
   def initialize(self):
     done = False
     while not done:
@@ -28,24 +38,20 @@ class ProgrammingInterface:
 
   def read(self, file, start=0x00, size=0x3FFF, chunksize=0x10):
     for address in range(start, start + size, chunksize):
-      request = [
-          0x05, 0x05,
-          chunksize,
-          (address >> 16) & 0xFF,
-          (address >> 8) & 0xFF,
-          address & 0xFF,
-          0x00,
-      ]
-
+      # Write request and wait for response
+      request = self.getReadRequest(address, chunksize)
       self.serial.write(request)
-      response = self.serial.read(chunksize + 1)
-      body = response[1:]
 
-      if len(response) > 0 and len(body) > 0:
+      # Response has to be at least 2 bytes long, otherwise something went wrong
+      response = self.serial.read(chunksize + 1)
+      if len(response) > 1:
+        status = response[0]
+        body = response[1:]
+
         print("===============================================")
         print("address: %s" % hex(address))
         print("request: %s" % bytes(request).hex())
-        print("response code: %s" % hex(response[0]))
+        print("response code: %s" % hex(status))
         print("response body: %s" % body.hex())
 
         line = bytearray([chunksize, (address >> 8) & 0xFF, address & 0xFF, 0x00]) + body
@@ -109,10 +115,14 @@ parser.add_argument('port', metavar='PORT', type=str,
                     help='Port to use')
 parser.add_argument('destination', metavar='DESTINATION', type=str, nargs='?', default=None,
                     help='Destination to write to or read from')
+#parser.add_argument('-m', '--mcu', type=str, default='BB2', choices=['BB1', 'BB2', 'BB51'],
+#                    help='MCU - important to read full space, including bootloader')
 
 args = parser.parse_args()
 interface = ProgrammingInterface(args.port)
 interface.initialize()
+
+# TODO: Identify the device
 
 if args.action == 'read':
   if not args.destination:
@@ -124,9 +134,11 @@ if args.action == 'read':
   # Fetch the flash segment
   interface.read(file, 0, 0x3FFF)
 
-  # Fetch the bootloader
-  # TODO: this could be passed via a parameter
-  #interface.read(file, 0xF000, 0x07FF)
+  # Reading the bootloader on BB51 does not seem to bepossible since we are not
+  # getting a response from this address space
+  # TODO: Fetch the bootloader on BB51
+  # if args.mcu == 'BB51':
+  #  interface.read(file, 0xF000, 0x0800)
 
   file.write(":00000001FF\n")
 
