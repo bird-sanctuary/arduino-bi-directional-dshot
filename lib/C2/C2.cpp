@@ -1,43 +1,101 @@
+/**
+ * C2 implementation according to SiLabs Application Note 127:
+ * https://www.silabs.com/documents/public/application-notes/AN127.pdf
+ */
+
 #include "C2.h"
 
-C2::C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed) {
+C2::C2(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, uint8_t pinCk, uint8_t pinD, uint8_t pinLed) {
   _port = port;
+  _ddr = ddr;
+  _pin = pin;
+
   _pinCk = pinCk;
   _pinD = pinD;
   _pinLed = pinLed;
+
+  device.id = 0x00;
+  device.revision = 0x00;
 }
 
+void C2::setup() {
+  Serial.begin(1000000);
+
+  *_ddr = 0x00 | (1 << _pinD) | (1 << _pinCk);
+  *_port = 0x00 | (1 << _pinCk);
+
+  digitalWrite(_pinLed, LOW);
+}
+
+/**
+ * Programming interface initialization sequence
+ *
+ * Page 15
+ */
 void C2::init() {
   reset();
 
-  writeAddress(0x02);
+  // Enable programming
+  writeAddress(FPCTL);
   writeData(0x02);
   writeData(0x04);
   writeData(0x01);
+
+  // Wait at lesat 20ms
+  delayMicroseconds(30);
 }
 
+/**
+ * Device reset
+ *
+ * Page 10
+ */
 void C2::reset() {
+  // Force CK LOW for at least 20us
   *_port &= ~(1 << _pinCk);
-  delayMicroseconds(50);
+  delayMicroseconds(30);
+
+  //Force CK HIGH
   *_port |= (1 << _pinCk);
-  delayMicroseconds(50);
+
+  // Wait at least 2us
+  delayMicroseconds(5);
+}
+
+void C2::deviceInfo() {
+  writeAddress(C2Addresses::DEVICEID);
+  device.id = readData();
+
+  writeAddress(C2Addresses::REVID);
+  device.revision = readData();
+}
+
+void C2::writeAddress(uint8_t address) {
+  sendAddressWriteInstruction();
+  sendByte(address);
+  sendStopBit();
+}
+
+void C2::writeSfr(uint8_t address, uint8_t data) {
+  writeAddress(address);
+  writeData(data);
 }
 
 uint8_t C2::readBits(uint8_t length) {
   uint8_t mask = 0x01 << (length - 1);
   uint8_t data = 0;
 
-  DDRD &= ~(1 << _pinD);
-  PIND &= (1 << _pinD);
+  *_ddr &= ~(1 << _pinD);
+  *_pin &= (1 << _pinD);
   for (uint8_t i = 0; i < length; i += 1) {
     clockPulse();
 
     data >>= 1;
-    if (PIND & (1 << _pinD)) {
+    if (*_pin & (1 << _pinD)) {
       data = data | mask;
     }
   }
-  DDRD |= (1 << _pinD);
+  *_ddr |= (1 << _pinD);
 
   return data;
 }
@@ -68,20 +126,32 @@ void C2::sendDataWriteInstruction(uint8_t byte) {
 
 void C2::sendBits(uint8_t data, uint8_t length) {
   for(uint8_t i = 0; i < length; i += 1) {
-    if(data & 0x01) {
+    if(data >> i & 0x01) {
       *_port |= (1 << _pinD);
     } else {
       *_port &= ~(1 << _pinD);
     }
 
     clockPulse();
-    data >>= 1;
   }
 }
 
+/**
+ * Clock strobe
+ *
+ * Page 10
+ */
 void C2::clockPulse() {
+  noInterrupts();
+
+  // Force low for 80ns - 5000ns
   *_port &= ~(1 << _pinCk);
+  delayMicroseconds(2);
+
+  // Force high for at least 120ns
   *_port |= (1 << _pinCk);
+
+  interrupts();
 }
 
 uint8_t C2::readByte() {
@@ -98,12 +168,6 @@ uint8_t C2::readAddress() {
   sendStopBit();
 
   return retval;
-}
-
-void C2::writeAddress(uint8_t address) {
-  sendAddressWriteInstruction();
-  sendByte(address);
-  sendStopBit();
 }
 
 void C2::writeData(uint8_t data) {
@@ -151,7 +215,7 @@ uint8_t C2::pollBitLow(uint8_t mask) {
 }
 
 uint8_t C2::readFlashBlock(uint16_t address, uint8_t *data, uint8_t bytes) {
-  writeAddress(FPDAT);
+  writeAddress(C2Addresses::FPDAT);
   writeData(BLOCK_READ);
 
   pollBitLow(_inBusy);
@@ -298,18 +362,6 @@ volatile uint8_t *C2::getMessage() {
   return _message;
 }
 
-void C2::setup() {
-  Serial.begin(1000000);
-
-  DDRD = 0x00;
-  DDRD |= (1 << _pinD) | (1 << _pinCk);
-
-  *_port = 0x00;
-  *_port |= (1 << _pinCk);
-
-  digitalWrite(_pinLed, LOW);
-}
-
 void C2::loop() {
   unsigned char crc;
   unsigned char newcrc;
@@ -321,12 +373,22 @@ void C2::loop() {
 
     if(_state == 3) {
       switch(_message[0]) {
-        case 0x00: {
+        case Actions::ACK: {
           Serial.write(0x80);
         } break;
 
-        case 0x01: {
+        case Actions::INIT: {
           init();
+          deviceInfo();
+
+          switch(device.id) {
+            case C2Devices::EFM8BB1:
+            case C2Devices::EFM8BB2: {
+              writeSfr(0xFF, 0x80);
+              delayMicroseconds(5);
+              writeSfr(0xEF, 0x02);
+            } break;
+          }
 
           Serial.write(0x81);
           digitalWrite(_pinLed, HIGH);
@@ -334,23 +396,21 @@ void C2::loop() {
           resetState();
         } break;
 
-        case 0x02: {
+        case Actions::RESET: {
           reset();
+          resetState();
 
           Serial.write(0x82);
           digitalWrite(_pinLed, LOW);
-
-          resetState();
         } break;
 
-        case 0x03: {
+        case Actions::WRITE: {
           address = (((unsigned long)(_message[4]))<<8) + (((unsigned long)(_message[5]))<<0);
           crc = _message[6];
           newcrc = _message[5] + _message[4];
           for(uint8_t i = 0; i < _message[2]; i+= 1) {
             _flashBuffer[i] = _message[i+7];
           }
-
 
           for(uint8_t i = 0; i < _message[2]; i += 1) {
             newcrc += _flashBuffer[i];
@@ -368,40 +428,55 @@ void C2::loop() {
           resetState();
         } break;
 
-        case 0x04: {
+        case Actions::ERASE: {
           eraseDevice();
-          Serial.write(0x84);
-
           resetState();
+
+          Serial.write(0x84);
         } break;
 
-        case 0x05: {
-          Serial.write(0x85);
+        case Actions::READ: {
+          uint8_t byteCount = _message[2];
+          unsigned long addressPart1 = ((unsigned long)(_message[3])) << 16;
+          unsigned long addressPart2 = ((unsigned long)(_message[4])) << 8;
+          unsigned long addressPart3 = ((unsigned long)(_message[5])) << 0;
 
-          address = (((unsigned long)(_message[3]))<<16) + (((unsigned long)(_message[4]))<<8) + (((unsigned long)(_message[5]))<<0);
-          readFlashBlock(address, _flashBuffer, _message[2]);
-          for(uint8_t i = 0; i < _message[2]; i += 1) {
+          address = addressPart1 | addressPart2 | addressPart3;
+          readFlashBlock(address, _flashBuffer, byteCount);
+          resetState();
+
+          Serial.write(0x85);
+          for(uint8_t i = 0; i < byteCount; i += 1) {
             Serial.write(_flashBuffer[i]);
           }
-
-          resetState();
         } break;
 
+        /*
         case 0x06: {
           writeAddress(_message[3]);
           writeData(_message[4]);
-          Serial.write(0x86);
-
           resetState();
+
+          Serial.write(0x86);
         } break;
 
         case 0x07: {
           writeAddress(_message[3]);
-          Serial.write(readData());
-          Serial.write(0x87);
-
+          data = readData();
           resetState();
+
+          Serial.write(data);
+          Serial.write(0x87);
         } break;
+        */
+
+        case Actions::INFO: {
+          resetState();
+
+          Serial.write(0x88);
+          Serial.write(device.id);
+          Serial.write(device.revision);
+        }
       }
     }
   }

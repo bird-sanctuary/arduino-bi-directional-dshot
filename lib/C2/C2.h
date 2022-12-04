@@ -4,28 +4,54 @@
 #define C2_H
 
 enum C2Instruction {
-  DATA_READ = 0x00,
-  DATA_WRITE = 0x01,
-  ADDRESS_READ = 0x02,
+  DATA_READ     = 0x00,
+  DATA_WRITE    = 0x01,
+  ADDRESS_READ  = 0x02,
   ADDRESS_WRITE = 0x03,
 };
 
 enum C2Addresses {
-  FPDAT = 0xB4, // May be different for non EFM8 targets
+  DEVICEID = 0x00,
+  REVID    = 0x01,
+  FPCTL    = 0x02,
+  FPDAT    = 0xB4, // May be different for non EFM8 targets
 };
 
 enum C2Commands {
-  DEVICE_ERASE= 0x03,
-  BLOCK_READ = 0x06,
-  BLOCK_WRITE = 0x07,
+  DEVICE_ERASE = 0x03,
+  BLOCK_READ   = 0x06,
+  BLOCK_WRITE  = 0x07,
+};
+
+enum C2Devices {
+  EFM8BB1  = 0x30,
+  EFM8BB2  = 0x32,
+  EFM8BB51 = 0x39,
+};
+
+enum Actions {
+  ACK   = 0x00,
+  INIT  = 0x01,
+  RESET = 0x02,
+  WRITE = 0x03,
+  ERASE = 0x04,
+  READ  = 0x05,
+  INFO  = 0x08
+};
+
+struct Device {
+  uint8_t id;
+  uint8_t revision;
 };
 
 class C2 {
   public:
-    C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
+    C2(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
 
     void init();
     void reset();
+
+    void deviceInfo();
 
     uint8_t readAddress();
     void writeAddress(uint8_t address);
@@ -62,11 +88,15 @@ class C2 {
     void sendAddressWriteInstruction();
     void sendDataWriteInstruction(uint8_t byte);
 
+    void writeSfr(uint8_t address, uint8_t data);
+
     void setup();
     void loop();
 
   private:
     volatile uint8_t *_port;
+    volatile uint8_t *_ddr;
+    volatile uint8_t *_pin;
 
     uint8_t _pinCk;
     uint8_t _pinD;
@@ -82,6 +112,8 @@ class C2 {
     volatile uint8_t _bytesLeft;
 
     uint8_t _flashBuffer[300];
+
+    Device device;
 };
 
 #endif
