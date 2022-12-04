@@ -52,13 +52,27 @@ const uint8_t pinDshot = 8;
 
 // If this pin is pulled low, then the device starts in C2 interface mode
 #define C2_ENABLE_PIN 13
+
+/*
+// When using Port B, make sure to remap the C2_ENABLE_PIN to a different port
+// Port definitions for Port B
+#define C2_PORT PORTB
+#define C2_DDR DDRB
+#define C2_PIN PINB
+
+// Pin 0-7 for the given port
+#define C2D_PIN  4 // D12
+#define C2CK_PIN 3 // D11
+*/
+
+// Port definitions for Port D
 #define C2_PORT PORTD
 #define C2_DDR DDRD
 #define C2_PIN PIND
 
 /* Pin 0-7 for the given port */
-#define C2D_PIN 2
-#define C2CK_PIN 3
+#define C2D_PIN  2 // D2
+#define C2CK_PIN 3 // D3
 
 /* Initialization */
 uint32_t dshotResponse = 0;
@@ -515,11 +529,8 @@ void c2Setup() {
 }
 
 void setup() {
-  /*
   pinMode(C2_ENABLE_PIN, INPUT_PULLUP);
   c2Mode = !digitalRead(C2_ENABLE_PIN);
-  */
-  c2Mode = true;
 
   if(c2Mode) {
     c2Setup();

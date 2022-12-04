@@ -12,6 +12,7 @@ enum C2Instruction {
 
 enum C2Addresses {
   FPDAT = 0xB4, // May be different for non EFM8 targets
+  FPCTL = 0x02,
 };
 
 enum C2Commands {
