@@ -50,6 +50,11 @@ I recommend you use Visual Studio Code with the platform IO plugin. A **platform
 ## C2 Interface
 This sketch also includes a C2 interface for your convenience, allowing to read, write and erase an EFM8 MCU. This will require you to install the EFM8 python client. Also by default the Arduino will start in DShot mode, to enable the C2 interface, pull pin 13 low and reset the arduino.
 
+```
+D  Pin 2
+CK Pin 3
+```
+
 To switch back to DShot mode, remove the jumper to low form pin 13 and reset the arduino.
 
 ### Installing python EFM8 client
@@ -59,18 +64,19 @@ pipenv install
 pipenv shell
 ```
 
-then run the client like so:
+then run the client like so (assuming `/dev/ttyUSB0` is your Arduino):
 
 ```
 python efm8.py read /dev/ttyUSB0 output.hex
 python efm8.py write /dev/ttyUSB0 input.hex
-python efm8.py erase
+python efm8.py erase /dev/ttyUSB0
 ```
 
 ## Compatibility
 This should work on any Arduino Uno or clone running at 16MHz. If you are using a different Arduino board, make sure you are using (and setting) the pin which has the "Input Capture" functionality.
 
 ## Resources
+* [SiLabs C2 Application note](https://www.silabs.com/documents/public/application-notes/AN127.pdf)
 * [DShot - the missing handbook](https://brushlesswhoop.com/dshot-and-bidirectional-dshot/)
 
 ## Contributions
