@@ -1,10 +1,25 @@
 #include "C2.h"
 
-C2::C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed) {
+C2::C2(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, uint8_t pinCk, uint8_t pinD, uint8_t pinLed) {
   _port = port;
+  _ddr = ddr;
+  _pin = pin;
+
   _pinCk = pinCk;
   _pinD = pinD;
   _pinLed = pinLed;
+}
+
+void C2::setup() {
+  Serial.begin(1000000);
+
+  *_ddr = 0x00;
+  *_ddr |= (1 << _pinD) | (1 << _pinCk);
+
+  *_port = 0x00;
+  *_port |= (1 << _pinCk);
+
+  digitalWrite(_pinLed, LOW);
 }
 
 void C2::init() {
@@ -27,17 +42,17 @@ uint8_t C2::readBits(uint8_t length) {
   uint8_t mask = 0x01 << (length - 1);
   uint8_t data = 0;
 
-  DDRD &= ~(1 << _pinD);
-  PIND &= (1 << _pinD);
+  *_ddr &= ~(1 << _pinD);
+  *_pin &= (1 << _pinD);
   for (uint8_t i = 0; i < length; i += 1) {
     clockPulse();
 
     data >>= 1;
-    if (PIND & (1 << _pinD)) {
+    if (*_pin & (1 << _pinD)) {
       data = data | mask;
     }
   }
-  DDRD |= (1 << _pinD);
+  *_ddr |= (1 << _pinD);
 
   return data;
 }
@@ -296,18 +311,6 @@ uint8_t C2::updateState(uint8_t data) {
 
 volatile uint8_t *C2::getMessage() {
   return _message;
-}
-
-void C2::setup() {
-  Serial.begin(1000000);
-
-  DDRD = 0x00;
-  DDRD |= (1 << _pinD) | (1 << _pinCk);
-
-  *_port = 0x00;
-  *_port |= (1 << _pinCk);
-
-  digitalWrite(_pinLed, LOW);
 }
 
 void C2::loop() {

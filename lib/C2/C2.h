@@ -22,7 +22,7 @@ enum C2Commands {
 
 class C2 {
   public:
-    C2(volatile uint8_t *port, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
+    C2(volatile uint8_t *port, volatile uint8_t *ddr, volatile uint8_t *pin, uint8_t pinCk, uint8_t pinD, uint8_t pinLed);
 
     void init();
     void reset();
@@ -67,6 +67,8 @@ class C2 {
 
   private:
     volatile uint8_t *_port;
+    volatile uint8_t *_ddr;
+    volatile uint8_t *_pin;
 
     uint8_t _pinCk;
     uint8_t _pinD;

@@ -53,6 +53,10 @@ const uint8_t pinDshot = 8;
 // If this pin is pulled low, then the device starts in C2 interface mode
 #define C2_ENABLE_PIN 13
 #define C2_PORT PORTD
+#define C2_DDR DDRD
+#define C2_PIN PIND
+
+/* Pin 0-7 for the given port */
 #define C2D_PIN 2
 #define C2CK_PIN 3
 
@@ -387,6 +391,11 @@ void printResponse() {
     uint16_t value = mapped >> 4;
     uint8_t crcExpected = dshot.calculateCrc(value);
 
+    //Serial.println(mapped, BIN);
+    Serial.print(value, BIN);
+    Serial.print(" ");
+    Serial.println(crc, BIN);
+
     // Wait for a first valid response
     if(!hasEsc) {
       if(crc == crcExpected) {
@@ -501,13 +510,16 @@ void dshotLoop() {
 }
 
 void c2Setup() {
-  c2 = new C2(&C2_PORT, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
+  c2 = new C2(&C2_PORT, &C2_DDR, &C2_PIN, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
   c2->setup();
 }
 
 void setup() {
+  /*
   pinMode(C2_ENABLE_PIN, INPUT_PULLUP);
   c2Mode = !digitalRead(C2_ENABLE_PIN);
+  */
+  c2Mode = true;
 
   if(c2Mode) {
     c2Setup();
