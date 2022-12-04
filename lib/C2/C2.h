@@ -88,6 +88,8 @@ class C2 {
     void sendAddressWriteInstruction();
     void sendDataWriteInstruction(uint8_t byte);
 
+    void writeSfr(uint8_t address, uint8_t data);
+
     void setup();
     void loop();
 

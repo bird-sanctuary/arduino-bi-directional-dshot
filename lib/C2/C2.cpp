@@ -41,7 +41,7 @@ void C2::init() {
   writeData(0x04);
   writeData(0x01);
 
-  // Wait at lesat 20mx
+  // Wait at lesat 20ms
   delayMicroseconds(30);
 }
 
@@ -74,6 +74,11 @@ void C2::writeAddress(uint8_t address) {
   sendAddressWriteInstruction();
   sendByte(address);
   sendStopBit();
+}
+
+void C2::writeSfr(uint8_t address, uint8_t data) {
+  writeAddress(address);
+  writeData(data);
 }
 
 uint8_t C2::readBits(uint8_t length) {
@@ -379,7 +384,9 @@ void C2::loop() {
           switch(device.id) {
             case C2Devices::EFM8BB1:
             case C2Devices::EFM8BB2: {
-              // TODO: setup properly
+              writeSfr(0xFF, 0x80);
+              delayMicroseconds(5);
+              writeSfr(0xEF, 0x02);
             } break;
           }
 
