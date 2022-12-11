@@ -52,9 +52,27 @@ const uint8_t pinDshot = 8;
 
 // If this pin is pulled low, then the device starts in C2 interface mode
 #define C2_ENABLE_PIN 13
+
+/*
+// When using Port B, make sure to remap the C2_ENABLE_PIN to a different port
+// Port definitions for Port B
+#define C2_PORT PORTB
+#define C2_DDR DDRB
+#define C2_PIN PINB
+
+// Pin 0-7 for the given port
+#define C2D_PIN  4 // D12
+#define C2CK_PIN 3 // D11
+*/
+
+// Port definitions for Port D
 #define C2_PORT PORTD
-#define C2D_PIN 2
-#define C2CK_PIN 3
+#define C2_DDR DDRD
+#define C2_PIN PIND
+
+/* Pin 0-7 for the given port */
+#define C2D_PIN  2 // D2
+#define C2CK_PIN 3 // D3
 
 /* Initialization */
 uint32_t dshotResponse = 0;
@@ -387,6 +405,11 @@ void printResponse() {
     uint16_t value = mapped >> 4;
     uint8_t crcExpected = dshot.calculateCrc(value);
 
+    //Serial.println(mapped, BIN);
+    Serial.print(value, BIN);
+    Serial.print(" ");
+    Serial.println(crc, BIN);
+
     // Wait for a first valid response
     if(!hasEsc) {
       if(crc == crcExpected) {
@@ -478,13 +501,13 @@ void printResponse() {
           Serial.print("A");
 
           Serial.print(" | D1: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug1);
 
           Serial.print(" | D2: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug2);
 
           Serial.print(" | D3: ");
-          Serial.print(edtCurrent);
+          Serial.print(edtDebug3);
 
           Serial.print(" | S: ");
           Serial.print(edtState);
@@ -501,7 +524,7 @@ void dshotLoop() {
 }
 
 void c2Setup() {
-  c2 = new C2(&C2_PORT, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
+  c2 = new C2(&C2_PORT, &C2_DDR, &C2_PIN, (uint8_t) C2CK_PIN, (uint8_t) C2D_PIN, (uint8_t) LED_BUILTIN);
   c2->setup();
 }
 
